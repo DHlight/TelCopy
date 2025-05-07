@@ -295,6 +295,7 @@ async def stop_job_in_db(db: Session, job_id: int):
                     to_cancel.append(task)
     for task in to_cancel:
         task.cancel()
+        running_job_tasks.discard(task)
 
 # Removed ensure_readtime_job_exists function as per user request
 

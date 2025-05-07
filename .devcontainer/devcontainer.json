@@ -16,5 +16,6 @@
   ],
   "forwardPorts": [8000],
   "postCreateCommand": "pip install -r telegram_manager/requirements.txt",
-  "workspaceFolder": "/workspace"
+  "workspaceFolder": "/workspace",
+  "workspaceMount": "source=${localWorkspaceFolder}/,target=/workspace,type=bind,consistency=cached"
 }
