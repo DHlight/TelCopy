@@ -85,11 +85,20 @@ async def run_readtime_job(job_id: int):
             logger.error("Source and destination accounts have the same session file. This can cause Telethon session conflicts.")
             raise ValueError("Source and destination accounts must have distinct session files.")
 
-        source_client = TelegramClient(source_account.session_file_path, source_account.app_id, source_account.app_hash_id)
-        dest_client = TelegramClient(dest_account.session_file_path, dest_account.app_id, dest_account.app_hash_id)
+        proxy = None
+        if settings.PROXY:
+            parts = settings.PROXY.split(",")
+            if len(parts) == 3:
+                proxy = (parts[0], parts[1], int(parts[2]))
 
-        await source_client.start()
-        await dest_client.start()
+        source_client = TelegramClient(source_account.session_file_path, source_account.app_id, source_account.app_hash_id, proxy=proxy)        await source_client.start()
+
+        if dest_account.bot_token:
+            dest_client = TelegramClient('bot_' + dest_account.phone_number, dest_account.app_id, dest_account.app_hash_id, proxy=proxy)
+            await dest_client.start(bot_token=dest_account.bot_token)
+        else:
+            dest_client = TelegramClient(dest_account.session_file_path, dest_account.app_id, dest_account.app_hash_id, proxy=proxy)
+            await dest_client.start()
 
         # Event handler for new messages on source channel
         @source_client.on(events.NewMessage(chats=job.source_channel))

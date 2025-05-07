@@ -10,6 +10,8 @@ from telethon.errors import SessionPasswordNeededError
 from telegram_manager.db.models import TelegramAccount
 from telegram_manager.db.utils import commit_with_retry
 from telegram_manager.core.config import settings
+from telethon import Button
+
 
 
 async def update_account_in_db(db: Session, phone_number: str, app_id: int = None, app_hash_id: str = None, session_file_path: str = None):

@@ -22,6 +22,7 @@ class TelegramAccount(Base):
     app_id = Column(Integer, nullable=False)
     app_hash_id = Column(String, nullable=False)
     session_file_path = Column(String, nullable=False)
+    bot_token = Column(String, nullable=True)  # New field for bot token
 
 class TelegramJob(Base):
     __tablename__ = "telegram_jobs"
