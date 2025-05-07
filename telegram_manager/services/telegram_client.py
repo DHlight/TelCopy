@@ -9,6 +9,8 @@ from telethon import TelegramClient
 from telethon.errors import SessionPasswordNeededError
 from telegram_manager.db.models import TelegramAccount
 from telegram_manager.db.utils import commit_with_retry
+from telegram_manager.core.config import settings
+
 
 async def update_account_in_db(db: Session, phone_number: str, app_id: int = None, app_hash_id: str = None, session_file_path: str = None):
     account = db.query(TelegramAccount).filter(TelegramAccount.phone_number == phone_number).first()
@@ -67,10 +69,17 @@ async def get_channels_for_account(db: Session, phone_number: str):
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
 
-    client = TelegramClient(account.session_file_path, account.app_id, account.app_hash_id)
+    proxy = None
+    if settings.PROXY:
+        # Expecting PROXY env var in format: "socks5,127.0.0.1,9050"
+        parts = settings.PROXY.split(",")
+        if len(parts) == 3:
+            proxy = (parts[0], parts[1], int(parts[2]))
+
+    client = TelegramClient(account.session_file_path, account.app_id, account.app_hash_id, proxy=proxy)
     await client.start()
     try:
-        dialogs = await client.get_dialogs()
+        
         channels = []
         async for dialog in client.iter_dialogs():
             if dialog.is_group or dialog.is_channel:
