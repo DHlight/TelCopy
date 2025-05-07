@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Telegram Manager Dashboard</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        h1 { color: #333; }
+        table { border-collapse: collapse; width: 100%; margin-bottom: 20px; }
+        th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
+        th { background-color: #f4f4f4; }
+    </style>
+</head>
+<body>
+    <h1>Telegram Manager Dashboard</h1>
+
+    <section>
+        <h2>Telegram Accounts</h2>
+        <table id="accounts-table">
+            <thead>
+                <tr>
+                    <th>Phone Number</th>
+                    <th>App ID</th>
+                    <th>App Hash ID</th>
+                </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+    </section>
+
+    <section>
+        <h2>Telegram Jobs</h2>
+        <table id="jobs-table">
+            <thead>
+                <tr>
+                    <th>Job ID</th>
+                    <th>Name</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+    </section>
+
+    <script>
+        async function fetchAccounts() {
+            const response = await fetch('/account/');
+            const data = await response.json();
+            const tbody = document.querySelector('#accounts-table tbody');
+            tbody.innerHTML = '';
+            data.accounts.forEach(acc => {
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td>${acc.phone_number}</td>
+                    <td>${acc.app_id}</td>
+                    <td>${acc.app_hash_id}</td>
+                `;
+                tbody.appendChild(row);
+            });
+        }
+
+        async function fetchJobs() {
+            const response = await fetch('/job/');
+            const jobs = await response.json();
+            const tbody = document.querySelector('#jobs-table tbody');
+            tbody.innerHTML = '';
+            jobs.forEach(job => {
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td>${job.id}</td>
+                    <td>${job.name}</td>
+                    <td>${job.status || 'N/A'}</td>
+                `;
+                tbody.appendChild(row);
+            });
+        }
+
+        async function loadDashboard() {
+            await fetchAccounts();
+            await fetchJobs();
+        }
+
+        window.onload = loadDashboard;
+    </script>
+</body>
+</html>
