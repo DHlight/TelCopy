@@ -53,9 +53,15 @@ async def run_full_job(job_id: int):
 
 async def run_readtime_job(job_id: int):
     logger.info(f"Starting readtime job with id: {job_id}")
-    # TODO: Implement the readtime job logic here
-    await asyncio.sleep(10)  # Simulate async work
-    logger.info(f"Completed readtime job with id: {job_id}")
+    try:
+        while True:
+            logger.info(f"Running readtime job iteration for id: {job_id}")
+            # TODO: Implement the actual readtime job logic here
+            await asyncio.sleep(10)  # Simulate async work
+    except asyncio.CancelledError:
+        logger.info(f"Readtime job with id: {job_id} has been cancelled")
+    finally:
+        logger.info(f"Exiting readtime job with id: {job_id}")
 
 async def schedule_job(db_job: TelegramJob):
     if db_job.job_type == JobTypeEnum.full.value:
