@@ -1,12 +1,18 @@
 import logging
 from sqlalchemy.orm import Session
+import hashlib
+import uuid
 from telegram_manager.db.models import TelegramJob, TelegramMessage, TelegramAccount, JobTypeEnum, JobStatusEnum
 from telegram_manager.schemas.telegram_job import JobCreate
 from telegram_manager.core.config import settings
 from telethon import TelegramClient, events
 import asyncio
-from telegram_manager.db.session import SessionLocal
 import os
+from telegram_manager.db.session import SessionLocal
+import shutil
+from telethon.errors import SessionPasswordNeededError
+from telegram_manager.db.models import TelegramJob, TelegramMessage
+from telegram_manager.db.utils import commit_with_retry
 
 logger = logging.getLogger("telegram_job_manager")
 logging.basicConfig(
@@ -22,8 +28,15 @@ from telegram_manager.db.models import JobTypeEnum, JobStatusEnum
 # Global set to track running job tasks
 running_job_tasks = set()
 
+def generate_job_hash_id(job: JobCreate) -> str:
+    # Generate a unique hash id for the job using UUID and job details
+    unique_str = f"{job.source_account_id}-{job.source_channel}-{job.dest_account_id}-{job.dest_channel}-{uuid.uuid4()}"
+    return hashlib.sha256(unique_str.encode('utf-8')).hexdigest()
+
 async def create_job_in_db(db: Session, job: JobCreate) -> TelegramJob:
+    job_id = generate_job_hash_id(job)
     db_job = TelegramJob(
+        id=job_id,
         source_account_id=job.source_account_id,
         source_channel=job.source_channel,
         dest_account_id=job.dest_account_id,
@@ -52,25 +65,150 @@ import shutil
 import tempfile
 
 async def run_full_job(job_id: int):
+
+
     logger.info(f"Starting full job with id: {job_id}")
-    # TODO: Implement the full job logic here
 
-    # Example: clone base session file to job-specific session file
-    # This is a placeholder, adjust according to actual session file usage
-    base_session_file = "session_files/base.session"
-    job_session_file = f"session_files/{job_id}_base.session"
+    db = SessionLocal()
+    source_client = None
+    dest_client = None
+
+    def clone_session_file(original_path: str, job_id: int) -> str:
+        if not original_path or not os.path.exists(original_path):
+            return original_path
+        base_name = os.path.basename(original_path)
+        new_name = f"{job_id}_{base_name}"
+        new_path = os.path.join(os.path.dirname(original_path), new_name)
+        shutil.copy(original_path, new_path)
+        logger.info(f"Cloned session file from {original_path} to {new_path}")
+        return new_path
+
+    source_session_file = None
+    dest_session_file = None
     try:
-        shutil.copy(base_session_file, job_session_file)
-        logger.info(f"Cloned session file for job {job_id}: {job_session_file}")
-        # Use job_session_file in TelegramClient or job logic here
+        # Fetch job details from DB
+        job = db.query(TelegramJob).filter(TelegramJob.id == job_id).first()
+        if not job:
+            logger.error(f"Job with id {job_id} not found")
+            return
 
-        await asyncio.sleep(10)  # Simulate async work
+        # Fetch source account details
+        source_account = db.query(TelegramAccount).filter(TelegramAccount.phone_number == job.source_account_id).first()
+        if not source_account:
+            logger.error(f"Source account {job.source_account_id} not found")
+            return
 
+        # Fetch destination account details
+        dest_account = db.query(TelegramAccount).filter(TelegramAccount.phone_number == job.dest_account_id).first()
+        if not dest_account:
+            logger.error(f"Destination account {job.dest_account_id} not found")
+            return
+
+        # Clone session files for source and destination accounts
+        source_session_file = clone_session_file(source_account.session_file_path, job_id)
+        dest_session_file = clone_session_file(dest_account.session_file_path, job_id)
+
+        proxy = None
+        if settings.PROXY:
+            parts = settings.PROXY.split(",")
+            if len(parts) == 3:
+                proxy = (parts[0], parts[1], int(parts[2]))
+
+        source_client = TelegramClient(source_session_file, source_account.app_id, source_account.app_hash_id, proxy=proxy)
+        await source_client.start()
+
+        if dest_account.bot_token:
+            dest_client = TelegramClient('bot_' + dest_account.phone_number, dest_account.app_id, dest_account.app_hash_id, proxy=proxy)
+            await dest_client.start(bot_token=dest_account.bot_token)
+        else:
+            dest_client = TelegramClient(dest_session_file, dest_account.app_id, dest_account.app_hash_id, proxy=proxy)
+            await dest_client.start()
+
+        # Read all messages from source channel and import to DB with tracking=0
+        async for message in source_client.iter_messages(job.source_channel):
+            # Ignore AnimatedSticker and Sticker messages
+            if hasattr(message.media, 'document') and message.media.document.mime_type == 'application/x-tgsticker':
+                        # Skip unsupported media type
+                logger.warning(f"Skipping unsupported media type in job {job_id}")
+                continue
+
+            media_path = None
+            if message.media:
+                downloads_dir = "downloads"
+                os.makedirs(downloads_dir, exist_ok=True)
+                media_path = await message.download_media(file=downloads_dir)
+
+            # Filter user id check
+            if job.filter_user_id and str(message.sender_id) != job.filter_user_id:
+                continue
+
+            db_message = TelegramMessage(
+                job_id=job_id,
+                message_id=str(message.id),
+                privateid=f"{str(message.id)}_{job_id}",
+                sender=str(message.sender_id) if message.sender_id else None,
+                content=message.text,
+                timestamp=message.date,
+                tracking=0
+            )
+            if media_path:
+                db_message.media_path = media_path
+            db.add(db_message)
+        commit_with_retry(db)
+        logger.info(f"Imported all messages from source channel {job.source_channel} to DB with tracking=0")
+
+        # Import messages from DB to destination channel and update tracking=1
+        unread_messages = db.query(TelegramMessage).filter(TelegramMessage.job_id == job_id, TelegramMessage.tracking == 0).order_by(TelegramMessage.message_id.asc()).all()
+        for db_message in unread_messages:
+            try:
+                if db_message.media_path:
+                    await dest_client.send_file(job.dest_channel, db_message.media_path)
+                elif db_message.content:
+                    try:
+                        await dest_client.send_message(job.dest_channel, db_message.content)
+                    except Exception as e:
+                        if "flood wait" in str(e).lower():
+                            import re
+                            import time
+                            wait_time = 60  # default wait time in seconds
+                            match = re.search(r"(\d+)", str(e))
+                            if match:
+                                wait_time = int(match.group(1))
+                            logger.warning(f"Flood wait detected. Sleeping for {wait_time} seconds.")
+                            await asyncio.sleep(wait_time)
+                            await dest_client.send_message(job.dest_channel, db_message.content)
+                        else:
+                            raise
+                db_message.tracking = 1
+                db.add(db_message)
+            except Exception as e:
+                logger.error(f"Failed to send message {db_message.message_id} to destination channel: {e}")
+        commit_with_retry(db)
+        await asyncio.sleep(1)  # Give some time for the messages to be sent
+        logger.info(f"Imported messages from DB to destination channel {job.dest_channel} and updated tracking=1")
+
+    except SessionPasswordNeededError:
+        logger.error(f"Two-step verification enabled, password required for job {job_id}")
+    except Exception as e:
+        logger.error(f"Exception in full job {job_id}: {e}")
     finally:
-        # Remove the cloned session file after job completes
-        if os.path.exists(job_session_file):
-            os.remove(job_session_file)
-            logger.info(f"Removed session file for job {job_id}: {job_session_file}")
+        if source_client:
+            await source_client.disconnect()
+        if dest_client:
+            await dest_client.disconnect()
+        db.close()
+
+        # Remove cloned session files
+        def remove_session_file(path: str):
+            if path and os.path.exists(path) and not path.endswith("base.session"):
+                try:
+                    os.remove(path)
+                    logger.info(f"Removed session file: {path}")
+                except Exception as e:
+                    logger.error(f"Failed to remove session file {path}: {e}")
+
+        remove_session_file(source_session_file)
+        remove_session_file(dest_session_file)
 
     logger.info(f"Completed full job with id: {job_id}")
 
@@ -139,6 +277,11 @@ async def run_readtime_job(job_id: int):
         async def handler(event):
             try:
                 message = event.message
+                # Disable forwarding if message is an AnimatedSticker or Sticker
+                if message.media and message.media.__class__.__name__ in ["AnimatedSticker", "Sticker"]:
+                    logger.info(f"Skipping forwarding of sticker message in job {job_id}")
+                    return
+
                 # Prepare forwarding with job id info
                 job_info_text = f"[Forwarded by job id: {job_id}]"
 

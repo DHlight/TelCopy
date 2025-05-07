@@ -28,7 +28,7 @@ class TelegramAccount(Base):
 class TelegramJob(Base):
     __tablename__ = "telegram_jobs"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(String, primary_key=True, index=True)  # Changed from Integer to String for hash id
     source_account_id = Column(String, ForeignKey("telegram_accounts.phone_number"), nullable=False)
     source_channel = Column(Integer, nullable=False)
     dest_account_id = Column(String, ForeignKey("telegram_accounts.phone_number"), nullable=False)
@@ -56,10 +56,13 @@ class TelegramMessage(Base):
     __tablename__ = "telegram_messages"
 
     id = Column(Integer, primary_key=True, index=True)
-    job_id = Column(Integer, ForeignKey("telegram_jobs.id"), nullable=False)
+    job_id = Column(String, ForeignKey("telegram_jobs.id"), nullable=False)  # Changed to String to match TelegramJob.id
     message_id = Column(String, nullable=False)
+    privateid = Column(String, nullable=True, index=True)  # New field for privateid as combination of message_id and job_id
     sender = Column(String, nullable=True)
     content = Column(Text, nullable=True)
     timestamp = Column(DateTime, nullable=True)
+    tracking = Column(Integer, default=0, nullable=False)
+    media_path = Column(String, nullable=True)
 
     job = relationship("TelegramJob", back_populates="messages")
