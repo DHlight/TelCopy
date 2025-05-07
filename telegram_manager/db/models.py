@@ -37,7 +37,19 @@ class TelegramJob(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+    filter_user_id = Column(String, nullable=True)
+
     messages = relationship("TelegramMessage", back_populates="job")
+
+    @property
+    def status_int(self) -> int:
+        # Return status as int, converting if necessary
+        if isinstance(self.status, int):
+            return self.status
+        try:
+            return int(self.status)
+        except Exception:
+            return JobStatusEnum.pending.value
 
 class TelegramMessage(Base):
     __tablename__ = "telegram_messages"

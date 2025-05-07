@@ -1,4 +1,5 @@
 from pydantic import BaseModel
+from typing import Optional
 
 class JobCreate(BaseModel):
     source_account_id: str
@@ -6,6 +7,7 @@ class JobCreate(BaseModel):
     dest_account_id: str
     dest_channel: int
     job_type: int  # Changed to int to represent enum values
+    filter_user_id: Optional[str] = None
 
 class JobResponse(BaseModel):
     id: int
@@ -18,3 +20,4 @@ class JobResponse(BaseModel):
 
     class Config:
         orm_mode = True
+        from_attributes = True
