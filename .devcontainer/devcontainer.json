@@ -1,0 +1,20 @@
+{
+  "name": "Telegram Manager Devcontainer",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "settings": {
+    "python.pythonPath": "/usr/local/bin/python",
+    "terminal.integrated.shell.linux": "/bin/bash"
+  },
+  "extensions": [
+    "ms-python.python",
+    "ms-python.vscode-pylance",
+    "blackbox-ide.blackbox",
+    "rangav.vscode-thunder-client"
+  ],
+  "forwardPorts": [8000],
+  "postCreateCommand": "pip install -r telegram_manager/requirements.txt",
+  "workspaceFolder": "/workspace"
+}

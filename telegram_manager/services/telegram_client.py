@@ -14,7 +14,7 @@ from telethon import Button
 
 
 
-async def update_account_in_db(db: Session, phone_number: str, app_id: int = None, app_hash_id: str = None, session_file_path: str = None):
+async def update_account_in_db(db: Session, phone_number: str, app_id: int = None, app_hash_id: str = None, session_file_path: str = None, bot_token: str = None):
     account = db.query(TelegramAccount).filter(TelegramAccount.phone_number == phone_number).first()
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
@@ -28,6 +28,8 @@ async def update_account_in_db(db: Session, phone_number: str, app_id: int = Non
         if account.session_file_path and os.path.exists(account.session_file_path):
             os.remove(account.session_file_path)
         account.session_file_path = session_file_path
+    if bot_token is not None:
+        account.bot_token = bot_token
 
     commit_with_retry(db)
     db.refresh(account)
@@ -54,12 +56,13 @@ async def save_session_file(session_file: UploadFile, phone_number: str) -> str:
         shutil.copyfileobj(session_file.file, buffer)
     return session_file_path
 
-async def create_account_in_db(db: Session, phone_number: str, app_id: int, app_hash_id: str, session_file_path: str) -> TelegramAccount:
+async def create_account_in_db(db: Session, phone_number: str, app_id: int, app_hash_id: str, session_file_path: str, bot_token: str = None) -> TelegramAccount:
     new_account = TelegramAccount(
         phone_number=phone_number,
         app_id=app_id,
         app_hash_id=app_hash_id,
-        session_file_path=session_file_path
+        session_file_path=session_file_path,
+        bot_token=bot_token
     )
     db.add(new_account)
     commit_with_retry(db)
@@ -85,7 +88,7 @@ async def get_channels_for_account(db: Session, phone_number: str):
         channels = []
         async for dialog in client.iter_dialogs():
             if dialog.is_group or dialog.is_channel:
-                channels.append({ "id": dialog.id, "title": dialog.name})
+                channels.append({ "id": dialog.id, "name": dialog.name})
             
         await client.disconnect()
         return channels

@@ -83,3 +83,10 @@ async def run_job_directly(job_id: int, db: Session = Depends(get_db)):
     else:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid job type")
     return {"message": f"Job {job_id} started directly"}
+
+@router.get("/{job_id}", response_model=JobResponse)
+async def get_job(job_id: int, db: Session = Depends(get_db)):
+    job = db.query(TelegramJob).filter(TelegramJob.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Job with id {job_id} not found")
+    return job

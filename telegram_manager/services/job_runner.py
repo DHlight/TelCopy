@@ -91,7 +91,8 @@ async def run_readtime_job(job_id: int):
             if len(parts) == 3:
                 proxy = (parts[0], parts[1], int(parts[2]))
 
-        source_client = TelegramClient(source_account.session_file_path, source_account.app_id, source_account.app_hash_id, proxy=proxy)        await source_client.start()
+        source_client = TelegramClient(source_account.session_file_path, source_account.app_id, source_account.app_hash_id, proxy=proxy)
+        await source_client.start()
 
         if dest_account.bot_token:
             dest_client = TelegramClient('bot_' + dest_account.phone_number, dest_account.app_id, dest_account.app_hash_id, proxy=proxy)

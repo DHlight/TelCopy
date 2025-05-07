@@ -19,12 +19,33 @@ app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__
 
 @app.get("/")
 async def root():
-    return {"message": "Welcome to the Telegram Manager API"}
+    index_path = os.path.join(os.path.dirname(__file__), "static", "index.html")
+    return FileResponse(index_path)
+
+@app.get("/index.html")
+async def index():
+    index_path = os.path.join(os.path.dirname(__file__), "static", "index.html")
+    return FileResponse(index_path)
 
 @app.get("/dashboard")
 async def dashboard():
     dashboard_path = os.path.join(os.path.dirname(__file__), "static", "dashboard.html")
     return FileResponse(dashboard_path)
+
+@app.get("/dashboard.html")
+async def dashboard_html():
+    dashboard_path = os.path.join(os.path.dirname(__file__), "static", "dashboard.html")
+    return FileResponse(dashboard_path)
+
+@app.get("/account.html")
+async def account_html():
+    account_path = os.path.join(os.path.dirname(__file__), "static", "account.html")
+    return FileResponse(account_path)
+
+@app.get("/task.html")
+async def task_html():
+    task_path = os.path.join(os.path.dirname(__file__), "static", "task.html")
+    return FileResponse(task_path)
 
 import asyncio
 

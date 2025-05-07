@@ -21,6 +21,7 @@ async def create_account(
     phone_number: str = Form(...),
     app_id: int = Form(...),
     app_hash_id: str = Form(...),
+    bot_token: str = Form(None),
     session_file: UploadFile = File(...),
     db: Session = Depends(get_db)
 ):
@@ -33,7 +34,7 @@ async def create_account(
     session_file_path = await save_session_file(session_file, phone_number)
 
     # Create new account record
-    new_account = await create_account_in_db(db, phone_number, app_id, app_hash_id, session_file_path)
+    new_account = await create_account_in_db(db, phone_number, app_id, app_hash_id, session_file_path, bot_token)
 
     return {"message": "Account created successfully", "phone_number": new_account.phone_number}
 
@@ -47,6 +48,7 @@ async def update_account(
     phone_number: str,
     app_id: int = Form(None),
     app_hash_id: str = Form(None),
+    bot_token: str = Form(None),
     session_file: UploadFile = File(None),
     db: Session = Depends(get_db)
 ):
@@ -61,7 +63,7 @@ async def update_account(
         session_file_path = await save_session_file(session_file, phone_number)
 
     from telegram_manager.services.telegram_client import update_account_in_db
-    updated_account = await update_account_in_db(db, phone_number, app_id, app_hash_id, session_file_path)
+    updated_account = await update_account_in_db(db, phone_number, app_id, app_hash_id, session_file_path, bot_token)
 
     return {"message": "Account updated successfully", "phone_number": updated_account.phone_number}
 
