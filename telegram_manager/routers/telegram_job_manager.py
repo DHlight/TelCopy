@@ -12,6 +12,7 @@ from telegram_manager.services.job_runner import (
     stop_job_in_db,
     run_full_job,
     run_readtime_job,
+    run_clean_job,
     stop_all_jobs_in_db,
 )
 from telegram_manager.core.config import settings
@@ -95,6 +96,14 @@ async def stop_all_jobs(background_tasks: BackgroundTasks, db: Session = Depends
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
     return {"message": "All jobs stopped successfully"}
+
+@router.post("/clean_channels", response_model=JobResponse)
+async def create_clean_channels_job(job: JobCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    if job.job_type != 2:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid job_type for clean channels job")
+    db_job = await create_job_in_db(db, job)
+    background_tasks.add_task(run_clean_job, db_job.id)
+    return JobResponse.from_orm(db_job).copy(update={"status": db_job.status_int})
 
 @router.get("/{job_id}", response_model=JobResponse)
 async def get_job(job_id: int, db: Session = Depends(get_db)):

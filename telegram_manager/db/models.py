@@ -7,6 +7,7 @@ import enum
 class JobTypeEnum(enum.IntEnum):
     full = 0
     readtime = 1
+    clean = 2
 
 class JobStatusEnum(enum.IntEnum):
     pending = 0

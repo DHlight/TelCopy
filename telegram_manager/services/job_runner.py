@@ -48,10 +48,30 @@ def run_async_job(coro_func, *args, **kwargs):
     else:
         loop.run_until_complete(coro_func(*args, **kwargs))
 
+import shutil
+import tempfile
+
 async def run_full_job(job_id: int):
     logger.info(f"Starting full job with id: {job_id}")
     # TODO: Implement the full job logic here
-    await asyncio.sleep(10)  # Simulate async work
+
+    # Example: clone base session file to job-specific session file
+    # This is a placeholder, adjust according to actual session file usage
+    base_session_file = "session_files/base.session"
+    job_session_file = f"session_files/{job_id}_base.session"
+    try:
+        shutil.copy(base_session_file, job_session_file)
+        logger.info(f"Cloned session file for job {job_id}: {job_session_file}")
+        # Use job_session_file in TelegramClient or job logic here
+
+        await asyncio.sleep(10)  # Simulate async work
+
+    finally:
+        # Remove the cloned session file after job completes
+        if os.path.exists(job_session_file):
+            os.remove(job_session_file)
+            logger.info(f"Removed session file for job {job_id}: {job_session_file}")
+
     logger.info(f"Completed full job with id: {job_id}")
 
 async def run_readtime_job(job_id: int):
@@ -62,6 +82,18 @@ async def run_readtime_job(job_id: int):
     db = SessionLocal()
     source_client = None
     dest_client = None
+
+    # Clone session files for this job
+    def clone_session_file(original_path: str, job_id: int) -> str:
+        if not original_path or not os.path.exists(original_path):
+            return original_path
+        base_name = os.path.basename(original_path)
+        new_name = f"{job_id}_{base_name}"
+        new_path = os.path.join(os.path.dirname(original_path), new_name)
+        shutil.copy(original_path, new_path)
+        logger.info(f"Cloned session file from {original_path} to {new_path}")
+        return new_path
+
     try:
         logger.info(f"run_readtime_job: fetching job with id {job_id}")
         # Fetch job details from DB
@@ -82,25 +114,24 @@ async def run_readtime_job(job_id: int):
             logger.error(f"Destination account {job.dest_account_id} not found")
             return
 
-        # # Create Telegram clients for source and destination
-        # if source_account.session_file_path == dest_account.session_file_path:
-        #     logger.error("Source and destination accounts have the same session file. This can cause Telethon session conflicts.")
-        #     raise ValueError("Source and destination accounts must have distinct session files.")
-
         proxy = None
         if settings.PROXY:
             parts = settings.PROXY.split(",")
             if len(parts) == 3:
                 proxy = (parts[0], parts[1], int(parts[2]))
 
-        source_client = TelegramClient(source_account.session_file_path, source_account.app_id, source_account.app_hash_id, proxy=proxy)
+        # Clone session files for source and destination accounts
+        source_session_file = clone_session_file(source_account.session_file_path, job_id)
+        dest_session_file = clone_session_file(dest_account.session_file_path, job_id)
+
+        source_client = TelegramClient(source_session_file, source_account.app_id, source_account.app_hash_id, proxy=proxy)
         await source_client.start()
 
         if dest_account.bot_token:
             dest_client = TelegramClient('bot_' + dest_account.phone_number, dest_account.app_id, dest_account.app_hash_id, proxy=proxy)
             await dest_client.start(bot_token=dest_account.bot_token)
         else:
-            dest_client = TelegramClient(dest_account.session_file_path, dest_account.app_id, dest_account.app_hash_id, proxy=proxy)
+            dest_client = TelegramClient(dest_session_file, dest_account.app_id, dest_account.app_hash_id, proxy=proxy)
             await dest_client.start()
 
         # Event handler for new messages on source channel
@@ -149,10 +180,32 @@ async def run_readtime_job(job_id: int):
     except Exception as e:
         logger.error(f"Exception in readtime job {job_id}: {e}")
     finally:
-        await source_client.disconnect()
-        await dest_client.disconnect()
+        if source_client:
+            await source_client.disconnect()
+        if dest_client:
+            await dest_client.disconnect()
         db.close()
+
+        # Remove cloned session files
+        def remove_session_file(path: str):
+            if path and os.path.exists(path) and not path.endswith("base.session"):
+                try:
+                    os.remove(path)
+                    logger.info(f"Removed session file: {path}")
+                except Exception as e:
+                    logger.error(f"Failed to remove session file {path}: {e}")
+
+        remove_session_file(source_session_file)
+        remove_session_file(dest_session_file)
+
         logger.info(f"Exiting readtime job with id: {job_id}")
+
+async def run_clean_job(job_id: int):
+    logger.info(f"Starting clean job with id: {job_id}")
+    # TODO: Implement the cleaning logic here
+    # For example, connect to TelegramClient, check channels/groups where user is admin, and clean messages
+    await asyncio.sleep(10)  # Simulate async work
+    logger.info(f"Completed clean job with id: {job_id}")
 
 async def schedule_job(db_job: TelegramJob):
     if db_job.job_type == JobTypeEnum.full.value:
@@ -170,6 +223,11 @@ async def schedule_job(db_job: TelegramJob):
             except Exception as e:
                 logger.error(f"Readtime job {db_job.id} failed with exception: {e}. Restarting...")
                 await asyncio.sleep(5)  # Wait before retrying
+    elif db_job.job_type == JobTypeEnum.clean.value:
+        task = asyncio.create_task(run_clean_job(db_job.id))
+        running_job_tasks.add(task)
+        task.add_done_callback(running_job_tasks.discard)
+        await task
     else:
         logger.error(f"Invalid job_type: {db_job.job_type}")
         raise ValueError("Invalid job_type")
