@@ -1,10 +1,11 @@
 import logging
 from sqlalchemy.orm import Session
-from telegram_manager.db.models import TelegramJob, TelegramMessage, TelegramAccount
+from telegram_manager.db.models import TelegramJob, TelegramMessage, TelegramAccount, JobTypeEnum, JobStatusEnum
 from telegram_manager.schemas.telegram_job import JobCreate
 from telegram_manager.core.config import settings
-from telethon import TelegramClient
+from telethon import TelegramClient, events
 import asyncio
+from telegram_manager.db.session import SessionLocal
 
 logger = logging.getLogger("telegram_job_manager")
 logging.basicConfig(
@@ -52,15 +53,82 @@ async def run_full_job(job_id: int):
     logger.info(f"Completed full job with id: {job_id}")
 
 async def run_readtime_job(job_id: int):
+
+
     logger.info(f"Starting readtime job with id: {job_id}")
+
+    db = SessionLocal()
+    source_client = None
+    dest_client = None
     try:
+        logger.info(f"run_readtime_job: fetching job with id {job_id}")
+        # Fetch job details from DB
+        job = db.query(TelegramJob).filter(TelegramJob.id == job_id).first()
+        if not job:
+            logger.error(f"Job with id {job_id} not found")
+            return
+
+        # Fetch source account details
+        source_account = db.query(TelegramAccount).filter(TelegramAccount.phone_number == job.source_account_id).first()
+        if not source_account:
+            logger.error(f"Source account {job.source_account_id} not found")
+            return
+
+        # Fetch destination account details
+        dest_account = db.query(TelegramAccount).filter(TelegramAccount.phone_number == job.dest_account_id).first()
+        if not dest_account:
+            logger.error(f"Destination account {job.dest_account_id} not found")
+            return
+
+        # Create Telegram clients for source and destination
+        if source_account.session_file_path == dest_account.session_file_path:
+            logger.error("Source and destination accounts have the same session file. This can cause Telethon session conflicts.")
+            raise ValueError("Source and destination accounts must have distinct session files.")
+
+        source_client = TelegramClient(source_account.session_file_path, source_account.app_id, source_account.app_hash_id)
+        dest_client = TelegramClient(dest_account.session_file_path, dest_account.app_id, dest_account.app_hash_id)
+
+        await source_client.start()
+        await dest_client.start()
+
+        # Event handler for new messages on source channel
+        @source_client.on(events.NewMessage(chats=job.source_channel))
+        async def handler(event):
+            try:
+                message = event.message
+                # Prepare forwarding with job id info
+                job_info_text = f"[Forwarded by job id: {job_id}]"
+
+                # Check message type and forward accordingly
+                if message.media:
+                    # Media or multi-media message
+                    # Forward media with caption including job id info
+                    caption = (message.text or "") + "\n" + job_info_text
+                    await dest_client.send_file(
+                        job.dest_channel,
+                        file=message.media,
+                        caption=caption
+                    )
+                else:
+                    # Text message
+                    text = (message.text or "") + "\n" + job_info_text
+                    await dest_client.send_message(job.dest_channel, text)
+                logger.info(f"Forwarded message from {job.source_channel} to {job.dest_channel} for job {job_id}")
+            except Exception as e:
+                logger.error(f"Error forwarding message in job {job_id}: {e}")
+
+        # Keep the clients running and listening until cancelled
         while True:
-            logger.info(f"Running readtime job iteration for id: {job_id}")
-            # TODO: Implement the actual readtime job logic here
-            await asyncio.sleep(10)  # Simulate async work
+            await asyncio.sleep(1)
+
     except asyncio.CancelledError:
         logger.info(f"Readtime job with id: {job_id} has been cancelled")
+    except Exception as e:
+        logger.error(f"Exception in readtime job {job_id}: {e}")
     finally:
+        await source_client.disconnect()
+        await dest_client.disconnect()
+        db.close()
         logger.info(f"Exiting readtime job with id: {job_id}")
 
 async def schedule_job(db_job: TelegramJob):
@@ -70,10 +138,15 @@ async def schedule_job(db_job: TelegramJob):
         task.add_done_callback(running_job_tasks.discard)
         await task
     elif db_job.job_type == JobTypeEnum.readtime.value:
-        task = asyncio.create_task(run_readtime_job(db_job.id))
-        running_job_tasks.add(task)
-        task.add_done_callback(running_job_tasks.discard)
-        await task
+        while True:
+            try:
+                task = asyncio.create_task(run_readtime_job(db_job.id))
+                running_job_tasks.add(task)
+                task.add_done_callback(running_job_tasks.discard)
+                await task
+            except Exception as e:
+                logger.error(f"Readtime job {db_job.id} failed with exception: {e}. Restarting...")
+                await asyncio.sleep(5)  # Wait before retrying
     else:
         logger.error(f"Invalid job_type: {db_job.job_type}")
         raise ValueError("Invalid job_type")
@@ -105,24 +178,7 @@ async def stop_job_in_db(db: Session, job_id: int):
     job.status = "stopped"
     db.commit()
 
-async def ensure_readtime_job_exists(db: Session):
-    # Check if a readtime job exists and is not stopped
-    readtime_job = db.query(TelegramJob).filter(
-        TelegramJob.job_type == JobTypeEnum.readtime.value,
-        TelegramJob.status != JobStatusEnum.stopped.value
-    ).first()
-    if not readtime_job:
-        # Create a new readtime job with default values and status pending
-        from telegram_manager.schemas.telegram_job import JobCreate
-        # For required fields, use placeholders or defaults; adjust as needed
-        new_job = JobCreate(
-            source_account_id="default_source_account",
-            source_channel=0,
-            dest_account_id="default_dest_account",
-            dest_channel=0,
-            job_type=JobTypeEnum.readtime.value
-        )
-        await create_job_in_db(db, new_job)
+# Removed ensure_readtime_job_exists function as per user request
 
 async def load_and_schedule_jobs_on_startup():
     from telegram_manager.db.session import SessionLocal
@@ -134,7 +190,7 @@ async def load_and_schedule_jobs_on_startup():
                 task.cancel()
         running_job_tasks.clear()
 
-        await ensure_readtime_job_exists(db)
+        # Removed call to ensure_readtime_job_exists as it no longer exists
 
         jobs = db.query(TelegramJob).filter(TelegramJob.status.in_([JobStatusEnum.pending.value, JobStatusEnum.running.value,JobStatusEnum.failed.value])).all()
         jobs = [job for job in jobs if job.status != JobStatusEnum.stopped.value]
