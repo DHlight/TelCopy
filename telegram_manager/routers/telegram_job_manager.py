@@ -12,16 +12,20 @@ from telegram_manager.services.job_runner import (
     stop_job_in_db,
     run_full_job,
     run_readtime_job,
+    stop_all_jobs_in_db,
 )
 from telegram_manager.core.config import settings
 
 import logging
+from telegram_manager.schemas.telegram_job import JobResponse
 
 router = APIRouter()
 
 @router.get("/", response_model=list[JobResponse])
 async def get_jobs(db: Session = Depends(get_db)):
-    return await get_all_jobs(db)
+    jobs = await get_all_jobs(db)
+    # Convert each job to JobResponse with status as int
+    return [JobResponse.from_orm(job).copy(update={"status": job.status_int}) for job in jobs]
 
 @router.post("/", response_model=JobResponse)
 async def create_job(job: JobCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
@@ -32,7 +36,7 @@ async def create_job(job: JobCreate, background_tasks: BackgroundTasks, db: Sess
         background_tasks.add_task(run_readtime_job, db_job.id)
     else:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid job type")
-    return db_job
+    return JobResponse.from_orm(db_job).copy(update={"status": db_job.status_int})
 
 @router.get("/health")
 async def health_check_endpoint():
@@ -76,17 +80,25 @@ async def run_job_directly(job_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Job with id {job_id} not found")
     from telegram_manager.services.job_runner import run_async_job
     import asyncio
-    if job.job_type == "full":
+    if job.job_type == 0:
         asyncio.create_task(run_full_job(job_id))
-    elif job.job_type == "readtime":
+    elif job.job_type == 1:
         asyncio.create_task(run_readtime_job(job_id))
     else:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid job type")
     return {"message": f"Job {job_id} started directly"}
+
+@router.post("/stop_all", status_code=status.HTTP_200_OK)
+async def stop_all_jobs(background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    try:
+        await stop_all_jobs_in_db()
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+    return {"message": "All jobs stopped successfully"}
 
 @router.get("/{job_id}", response_model=JobResponse)
 async def get_job(job_id: int, db: Session = Depends(get_db)):
     job = db.query(TelegramJob).filter(TelegramJob.id == job_id).first()
     if not job:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Job with id {job_id} not found")
-    return job
+    return JobResponse.from_orm(job).copy(update={"status": job.status_int})

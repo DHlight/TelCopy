@@ -68,6 +68,10 @@
                                     <option value="1">Readtime</option>
                                 </select>
                             </div>
+                            <div class="col-md-12">
+                                <label for="filter_user_id" class="form-label">Filter User ID (Optional)</label>
+                                <input type="text" class="form-control" id="filter_user_id" name="filter_user_id" placeholder="Enter filter user ID" />
+                            </div>
                             <div class="col-12">
                                 <button type="submit" class="btn btn-primary w-100">Create Task</button>
                             </div>
@@ -83,6 +87,10 @@
                         <h2 class="h5 mb-0">Task List</h2>
                     </div>
                     <div class="card-body">
+                        <div class="mb-3 d-flex gap-2">
+                            <button id="reload-all-jobs-btn" class="btn btn-primary">Reload All Jobs</button>
+                            <button id="stop-all-jobs-btn" class="btn btn-danger">Stop All Jobs</button>
+                        </div>
                         <table id="jobs-table" class="table table-striped table-bordered mb-0">
                             <thead class="table-dark">
                                 <tr>
@@ -116,6 +124,14 @@
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 
     <script>
+        const JobStatusEnum = {
+            0: "pending",
+            1: "running",
+            2: "completed",
+            3: "failed",
+            4: "stopped"
+        };
+
         async function fetchAccounts() {
             try {
                 const response = await fetch('/account/');
@@ -191,7 +207,7 @@
                 const row = document.createElement('tr');
                 row.innerHTML = `
                     <td><a href="#" onclick="showTaskDetail(${task.id});return false;">${task.id}</a></td>
-                    <td>${task.status || 'N/A'}</td>
+                    <td>${JobStatusEnum[task.status] || 'N/A'}</td>
                     <td>
                         <button class="btn btn-sm btn-danger me-1" onclick="deleteTask(${task.id})">Delete</button>
                         <button class="btn btn-sm btn-warning me-1" onclick="stopTask(${task.id})">Stop</button>
@@ -218,6 +234,36 @@
             }
         }
 
+        async function stopTask(taskId) {
+            try {
+                const response = await fetch('/job/stop/' + taskId, { method: 'POST' });
+                if (response.ok) {
+                    document.getElementById('result-message').innerHTML = '<div class="alert alert-success">Task stopped successfully.</div>';
+                    fetchTasks();
+                } else {
+                    const errorData = await response.json();
+                    document.getElementById('result-message').innerHTML = `<div class="alert alert-danger">Error: ${errorData.detail || 'Failed to stop task.'}</div>`;
+                }
+            } catch (error) {
+                document.getElementById('result-message').innerHTML = `<div class="alert alert-danger">Error: ${error.message}</div>`;
+            }
+        }
+
+        async function runTask(taskId) {
+            try {
+                const response = await fetch('/job/run/' + taskId, { method: 'POST' });
+                if (response.ok) {
+                    document.getElementById('result-message').innerHTML = '<div class="alert alert-success">Task started successfully.</div>';
+                    fetchTasks();
+                } else {
+                    const errorData = await response.json();
+                    document.getElementById('result-message').innerHTML = `<div class="alert alert-danger">Error: ${errorData.detail || 'Failed to start task.'}</div>`;
+                }
+            } catch (error) {
+                document.getElementById('result-message').innerHTML = `<div class="alert alert-danger">Error: ${error.message}</div>`;
+            }
+        }
+
         async function showTaskDetail(taskId) {
             try {
                 const response = await fetch('/job/' + taskId);
@@ -226,7 +272,7 @@
                     return;
                 }
                 const task = await response.json();
-                const detailSection = document.getElementById('task-detail-section');
+                const detailSection = document.getElementById('task-detail-card');
                 const detailContent = document.getElementById('task-detail-content');
                 detailContent.innerHTML = `
                     <p><strong>Task ID:</strong> ${task.id}</p>
@@ -235,7 +281,7 @@
                     <p><strong>Destination Account ID:</strong> ${task.dest_account_id}</p>
                     <p><strong>Destination Channel:</strong> ${task.dest_channel}</p>
                     <p><strong>Job Type:</strong> ${task.job_type}</p>
-                    <p><strong>Status:</strong> ${task.status}</p>
+                    <p><strong>Status:</strong> ${JobStatusEnum[task.status] || 'N/A'}</p>
                     <p><strong>Created At:</strong> ${new Date(task.created_at).toLocaleString()}</p>
                     <p><strong>Updated At:</strong> ${new Date(task.updated_at).toLocaleString()}</p>
                 `;
@@ -246,7 +292,7 @@
         }
 
         document.getElementById('close-task-detail').addEventListener('click', () => {
-            document.getElementById('task-detail-section').style.display = 'none';
+            document.getElementById('task-detail-card').style.display = 'none';
         });
 
         document.getElementById('create-task-form').addEventListener('submit', async (e) => {
@@ -257,7 +303,8 @@
                 source_channel: form.source_channel.value,
                 dest_account_id: form.dest_account_id.value.trim(),
                 dest_channel: form.dest_channel.value,
-                job_type: parseInt(form.job_type.value)
+                job_type: parseInt(form.job_type.value),
+                filter_user_id: form.filter_user_id.value.trim() || null
             };
 
             try {
@@ -282,6 +329,40 @@
         window.onload = () => {
             fetchAccounts();
             fetchTasks();
+
+            document.getElementById('reload-all-jobs-btn').addEventListener('click', async () => {
+                const resultMessage = document.getElementById('result-message');
+                resultMessage.innerHTML = '';
+                try {
+                    const response = await fetch('/job/reload_all', { method: 'POST' });
+                    if (response.ok) {
+                        resultMessage.innerHTML = '<div class="alert alert-success">All jobs reloaded and scheduled successfully.</div>';
+                        fetchTasks();
+                    } else {
+                        const errorData = await response.json();
+                        resultMessage.innerHTML = `<div class="alert alert-danger">Error: ${errorData.detail || 'Failed to reload all jobs.'}</div>`;
+                    }
+                } catch (error) {
+                    resultMessage.innerHTML = `<div class="alert alert-danger">Error: ${error.message}</div>`;
+                }
+            });
+
+            document.getElementById('stop-all-jobs-btn').addEventListener('click', async () => {
+                const resultMessage = document.getElementById('result-message');
+                resultMessage.innerHTML = '';
+                try {
+                    const response = await fetch('/job/stop_all', { method: 'POST' });
+                    if (response.ok) {
+                        resultMessage.innerHTML = '<div class="alert alert-success">All jobs stopped successfully.</div>';
+                        fetchTasks();
+                    } else {
+                        const errorData = await response.json();
+                        resultMessage.innerHTML = `<div class="alert alert-danger">Error: ${errorData.detail || 'Failed to stop all jobs.'}</div>`;
+                    }
+                } catch (error) {
+                    resultMessage.innerHTML = `<div class="alert alert-danger">Error: ${error.message}</div>`;
+                }
+            });
         };
     </script>
 </body>

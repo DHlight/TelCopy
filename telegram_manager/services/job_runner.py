@@ -6,6 +6,7 @@ from telegram_manager.core.config import settings
 from telethon import TelegramClient, events
 import asyncio
 from telegram_manager.db.session import SessionLocal
+import os
 
 logger = logging.getLogger("telegram_job_manager")
 logging.basicConfig(
@@ -28,7 +29,8 @@ async def create_job_in_db(db: Session, job: JobCreate) -> TelegramJob:
         dest_account_id=job.dest_account_id,
         dest_channel=job.dest_channel,
         job_type=job.job_type,
-        status=JobStatusEnum.pending.value
+        status=JobStatusEnum.pending.value,
+        filter_user_id=getattr(job, 'filter_user_id', None)
     )
     db.add(db_job)
     commit_with_retry(db)
@@ -80,10 +82,10 @@ async def run_readtime_job(job_id: int):
             logger.error(f"Destination account {job.dest_account_id} not found")
             return
 
-        # Create Telegram clients for source and destination
-        if source_account.session_file_path == dest_account.session_file_path:
-            logger.error("Source and destination accounts have the same session file. This can cause Telethon session conflicts.")
-            raise ValueError("Source and destination accounts must have distinct session files.")
+        # # Create Telegram clients for source and destination
+        # if source_account.session_file_path == dest_account.session_file_path:
+        #     logger.error("Source and destination accounts have the same session file. This can cause Telethon session conflicts.")
+        #     raise ValueError("Source and destination accounts must have distinct session files.")
 
         proxy = None
         if settings.PROXY:
@@ -112,13 +114,23 @@ async def run_readtime_job(job_id: int):
                 # Check message type and forward accordingly
                 if message.media:
                     # Media or multi-media message
-                    # Forward media with caption including job id info
-                    caption = (message.text or "") + "\n" + job_info_text
-                    await dest_client.send_file(
-                        job.dest_channel,
-                        file=message.media,
-                        caption=caption
-                    )
+                    # Check for unsupported media types (e.g., games)
+                    if hasattr(message.media, 'document') and message.media.document.mime_type == 'application/x-tgsticker':
+                        # Skip unsupported media type
+                        logger.warning(f"Skipping unsupported media type in job {job_id}")
+                    else:
+                        # Forward media with caption including job id info
+                        caption = (message.text or "") + "\n" + job_info_text
+                        downloads_dir = "downloads"
+                        os.makedirs(downloads_dir, exist_ok=True)
+
+                        file_path = await message.download_media(file=downloads_dir)
+
+                        await dest_client.send_file(
+                            job.dest_channel,
+                            file=file_path,
+                            caption=caption
+                        )
                 else:
                     # Text message
                     text = (message.text or "") + "\n" + job_info_text
@@ -126,6 +138,7 @@ async def run_readtime_job(job_id: int):
                 logger.info(f"Forwarded message from {job.source_channel} to {job.dest_channel} for job {job_id}")
             except Exception as e:
                 logger.error(f"Error forwarding message in job {job_id}: {e}")
+                logger.error(f"Message content: {message}")
 
         # Keep the clients running and listening until cancelled
         while True:
@@ -172,6 +185,28 @@ async def delete_job_in_db(db: Session, job_id: int):
     job = db.query(TelegramJob).filter(TelegramJob.id == job_id).first()
     if not job:
         raise ValueError(f"Job with id {job_id} not found")
+
+    # Stop the job by setting status to stopped
+    from telegram_manager.db.models import JobStatusEnum
+    job.status = JobStatusEnum.stopped.value
+    db.commit()
+
+    # Cancel running async tasks related to this job
+    to_cancel = []
+    for task in running_job_tasks:
+        if not task.done():
+            # Check if the task is for this job_id by inspecting the coroutine
+            coro = task.get_coro()
+            if hasattr(coro, 'cr_frame') and coro.cr_frame is not None:
+                # Try to get job_id from coroutine frame locals
+                frame_locals = coro.cr_frame.f_locals
+                if 'job_id' in frame_locals and frame_locals['job_id'] == job_id:
+                    to_cancel.append(task)
+    for task in to_cancel:
+        task.cancel()
+        running_job_tasks.discard(task)
+
+    # Now delete the job from DB
     db.delete(job)
     db.commit()
 
@@ -185,8 +220,23 @@ async def stop_job_in_db(db: Session, job_id: int):
     job = db.query(TelegramJob).filter(TelegramJob.id == job_id).first()
     if not job:
         raise ValueError(f"Job with id {job_id} not found")
-    job.status = "stopped"
+    from telegram_manager.db.models import JobStatusEnum
+    job.status = JobStatusEnum.stopped.value
     db.commit()
+
+    # Cancel running async tasks related to this job
+    to_cancel = []
+    for task in running_job_tasks:
+        if not task.done():
+            # Check if the task is for this job_id by inspecting the coroutine
+            coro = task.get_coro()
+            if hasattr(coro, 'cr_frame') and coro.cr_frame is not None:
+                # Try to get job_id from coroutine frame locals
+                frame_locals = coro.cr_frame.f_locals
+                if 'job_id' in frame_locals and frame_locals['job_id'] == job_id:
+                    to_cancel.append(task)
+    for task in to_cancel:
+        task.cancel()
 
 # Removed ensure_readtime_job_exists function as per user request
 
@@ -227,5 +277,24 @@ async def reload_and_schedule_all_jobs():
         tasks = [asyncio.create_task(schedule_job(job)) for job in jobs]
         if tasks:
             await asyncio.gather(*tasks)
+    finally:
+        db.close()
+
+async def stop_all_jobs_in_db():
+    from telegram_manager.db.session import SessionLocal
+    from telegram_manager.db.models import JobStatusEnum
+    db = SessionLocal()
+    try:
+        # Cancel all running tasks
+        to_cancel = [task for task in running_job_tasks if not task.done()]
+        for task in to_cancel:
+            task.cancel()
+            running_job_tasks.discard(task)
+
+        # Update all jobs status to stopped
+        jobs = db.query(TelegramJob).filter(TelegramJob.status != JobStatusEnum.stopped.value).all()
+        for job in jobs:
+            job.status = JobStatusEnum.stopped.value
+        db.commit()
     finally:
         db.close()
